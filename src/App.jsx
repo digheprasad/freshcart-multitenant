@@ -5,6 +5,28 @@ import { io } from 'socket.io-client';
 const API = '/api';
 const DEFAULT_SEO_IMAGE = 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=1200&q=80';
 const ORDER_STATUSES = ['pending', 'processing', 'packed', 'shipped', 'delivered', 'cancelled'];
+const PRODUCT_UNIT_OPTIONS = [
+  { value: 'g', label: 'Gram (g)', shortLabel: 'g' },
+  { value: 'mg', label: 'Milligram (mg)', shortLabel: 'mg' },
+  { value: 'kg', label: 'Kilogram (kg)', shortLabel: 'kg' },
+  { value: 'liter', label: 'Litre (L)', shortLabel: 'L' },
+  { value: 'ml', label: 'Millilitre (ml)', shortLabel: 'ml' },
+  { value: 'piece', label: 'Piece (pc)', shortLabel: 'pc' },
+  { value: 'dozen', label: 'Dozen (dz)', shortLabel: 'dz' },
+  { value: 'packet', label: 'Packet (pkt)', shortLabel: 'pkt' },
+  { value: 'box', label: 'Box', shortLabel: 'box' },
+  { value: 'bottle', label: 'Bottle', shortLabel: 'bottle' },
+  { value: 'pouch', label: 'Pouch', shortLabel: 'pouch' },
+  { value: 'bundle', label: 'Bundle', shortLabel: 'bundle' },
+  { value: 'pair', label: 'Pair', shortLabel: 'pair' },
+  { value: 'set', label: 'Set', shortLabel: 'set' },
+  { value: 'pack', label: 'Pack', shortLabel: 'pack' },
+  { value: 'carton', label: 'Carton', shortLabel: 'carton' },
+  { value: 'tray', label: 'Tray', shortLabel: 'tray' },
+  { value: 'roll', label: 'Roll', shortLabel: 'roll' },
+  { value: 'meter', label: 'Meter (m)', shortLabel: 'm' },
+];
+const FRACTIONAL_PRODUCT_UNITS = new Set(['g', 'mg', 'kg', 'liter', 'ml', 'meter']);
 
 async function request(path, options = {}) {
   const isFormData = options.body instanceof FormData;
@@ -35,7 +57,31 @@ function formatCurrency(value) {
 }
 
 function getProductUnit(product) {
-  return ['kg', 'liter'].includes(product?.unit) ? product.unit : 'piece';
+  return PRODUCT_UNIT_OPTIONS.some(({ value }) => value === product?.unit) ? product.unit : 'piece';
+}
+
+function getProductUnitLabel(unit) {
+  return PRODUCT_UNIT_OPTIONS.find((option) => option.value === unit)?.shortLabel || 'pc';
+}
+
+function isFractionalProductUnit(unit) {
+  return FRACTIONAL_PRODUCT_UNITS.has(unit);
+}
+
+function groupCartItemsByShop(cart) {
+  return Object.entries(cart).reduce((groups, [productId, item]) => {
+    const shopSlug = item.shopSlug || '';
+    if (!groups[shopSlug]) groups[shopSlug] = [];
+    groups[shopSlug].push({ productId, item });
+    return groups;
+  }, {});
+}
+
+function formatShopName(slug) {
+  return String(slug || 'Unknown shop')
+    .split('-')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
 }
 
 function formatQuantity(value) {
@@ -252,6 +298,8 @@ function ShopPage() {
   const { slug } = useParams();
   const [shop, setShop] = useState(null);
   const [products, setProducts] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [selectedCategoryId, setSelectedCategoryId] = useState('all');
   const [selectedQuantities, setSelectedQuantities] = useState({});
   const [cart, setCart] = useState(() => {
     try {
@@ -266,10 +314,13 @@ function ShopPage() {
       .then((data) => {
         setShop(data.shop);
         setProducts(data.products || []);
+        setCategories(data.categories || []);
+        setSelectedCategoryId('all');
       })
       .catch(() => {
         setShop(null);
         setProducts([]);
+        setCategories([]);
       });
   }, [slug]);
 
@@ -284,15 +335,39 @@ function ShopPage() {
         ...(current[product.id] || {}),
         product,
         shopSlug: slug,
+        shopName: shop?.name || formatShopName(slug),
         quantity: Number(current[product.id]?.quantity || 0) + quantity,
       },
     }));
   };
 
-  const totalItems = useMemo(
-    () => Object.keys(cart).length,
-    [cart]
-  );
+  const removeCartItem = (productId) => {
+    setCart((current) => {
+      const next = { ...current };
+      delete next[productId];
+      return next;
+    });
+  };
+
+  const removeShopItems = (shopSlug) => {
+    setCart((current) => Object.fromEntries(
+      Object.entries(current).filter(([, item]) => item.shopSlug !== shopSlug)
+    ));
+  };
+
+  const cartGroups = groupCartItemsByShop(cart);
+  const totalItems = Object.keys(cart).length;
+  const otherProductCount = products.filter((product) => (
+    !categories.some((category) => String(category.id) === String(product.category_id))
+  )).length;
+  const visibleProducts = selectedCategoryId === 'all'
+    ? products
+    : selectedCategoryId === 'other'
+      ? products.filter((product) => !categories.some((category) => String(category.id) === String(product.category_id)))
+      : products.filter((product) => String(product.category_id) === String(selectedCategoryId));
+  const selectedCategoryName = selectedCategoryId === 'other'
+    ? 'Other products'
+    : categories.find((category) => String(category.id) === String(selectedCategoryId))?.name || 'All products';
   const shopStructuredData = useMemo(() => {
     if (!shop) return null;
     return {
@@ -354,9 +429,88 @@ function ShopPage() {
               <Link to="/checkout" className="btn btn-primary">Checkout</Link>
             </div>
           </section>
+          {totalItems ? (
+            <section className="panel cart-panel" aria-label="Shopping cart">
+              <h2>Your cart</h2>
+              {Object.entries(cartGroups).map(([shopSlug, shopItems]) => (
+                <section className="cart-shop-group" key={shopSlug}>
+                  <div className="cart-shop-header">
+                    <h3>{shopItems[0]?.item.shopName || formatShopName(shopSlug)}</h3>
+                    <button type="button" className="btn btn-secondary" onClick={() => removeShopItems(shopSlug)}>
+                      Remove shop items
+                    </button>
+                  </div>
+                  <ul className="customer-order-items">
+                    {shopItems.map(({ productId, item }) => (
+                      <li key={productId}>
+                        <span className="cart-item-name">
+                          <span>{item.product.name}</span>
+                          <small>{formatQuantity(item.quantity)} {getProductUnitLabel(getProductUnit(item.product))}</small>
+                        </span>
+                        <div className="cart-item-actions">
+                          <strong>{formatCurrency((item.product.discount_price || item.product.price) * Number(item.quantity || 0))}</strong>
+                          <button type="button" className="btn btn-secondary" onClick={() => removeCartItem(productId)}>
+                            Remove
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </section>
+          ) : null}
 
-          <section className="product-grid">
-            {products.map((product) => (
+          {(categories.length || otherProductCount) ? (
+            <section className="shop-categories" aria-label="Shop by category">
+              <h2>Shop by category</h2>
+              <div className="category-grid">
+                <button
+                  type="button"
+                  className={`category-card ${selectedCategoryId === 'all' ? 'active' : ''}`}
+                  aria-pressed={selectedCategoryId === 'all'}
+                  onClick={() => setSelectedCategoryId('all')}
+                >
+                  <img src={DEFAULT_SEO_IMAGE} alt="" />
+                  <span>All products</span>
+                  <small>{products.length} products</small>
+                </button>
+                {categories.map((category) => {
+                  const productCount = products.filter((product) => String(product.category_id) === String(category.id)).length;
+                  return (
+                    <button
+                      type="button"
+                      key={category.id}
+                      className={`category-card ${String(selectedCategoryId) === String(category.id) ? 'active' : ''}`}
+                      aria-pressed={String(selectedCategoryId) === String(category.id)}
+                      onClick={() => setSelectedCategoryId(category.id)}
+                    >
+                      <img src={category.image_url || DEFAULT_SEO_IMAGE} alt="" />
+                      <span>{category.name}</span>
+                      <small>{productCount} products</small>
+                    </button>
+                  );
+                })}
+                {otherProductCount ? (
+                  <button
+                    type="button"
+                    className={`category-card ${selectedCategoryId === 'other' ? 'active' : ''}`}
+                    aria-pressed={selectedCategoryId === 'other'}
+                    onClick={() => setSelectedCategoryId('other')}
+                  >
+                    <img src={DEFAULT_SEO_IMAGE} alt="" />
+                    <span>Other products</span>
+                    <small>{otherProductCount} products</small>
+                  </button>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
+
+          <section className="product-section">
+            <h2>{selectedCategoryName}</h2>
+            <div className="product-grid">
+            {visibleProducts.map((product) => (
               <article className="product-card" key={product.id}>
                 <img src={product.image_url || 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=800&q=80'} alt={product.name} />
                 <div className="product-body">
@@ -367,18 +521,18 @@ function ShopPage() {
                   <h3>{product.name}</h3>
                   <p>{product.description}</p>
                   <div className="price-row">
-                    <strong>{formatCurrency(product.discount_price || product.price)} / {getProductUnit(product)}</strong>
-                    {product.discount_price ? <span>{formatCurrency(product.price)} / {getProductUnit(product)}</span> : null}
+                    <strong>{formatCurrency(product.discount_price || product.price)} / {getProductUnitLabel(getProductUnit(product))}</strong>
+                    {product.discount_price ? <span>{formatCurrency(product.price)} / {getProductUnitLabel(getProductUnit(product))}</span> : null}
                   </div>
                   <div className="stock-row">
-                    <span>{formatQuantity(product.stock)} {getProductUnit(product)} available</span>
+                    <span>{formatQuantity(product.stock)} {getProductUnitLabel(getProductUnit(product))} available</span>
                     <label>
-                      Quantity ({getProductUnit(product)})
+                      Quantity ({getProductUnitLabel(getProductUnit(product))})
                       <input
                         type="number"
-                        min={getProductUnit(product) === 'piece' ? '1' : '0.01'}
+                        min={isFractionalProductUnit(getProductUnit(product)) ? '0.01' : '1'}
                         max={product.stock}
-                        step={getProductUnit(product) === 'piece' ? '1' : '0.01'}
+                        step={isFractionalProductUnit(getProductUnit(product)) ? '0.01' : '1'}
                         value={selectedQuantities[product.id] ?? String(Math.min(1, Number(product.stock) || 1))}
                         onChange={(event) => setSelectedQuantities((current) => ({
                           ...current,
@@ -401,6 +555,8 @@ function ShopPage() {
                 </div>
               </article>
             ))}
+            {!visibleProducts.length ? <div className="empty-state">No products in this category yet.</div> : null}
+            </div>
           </section>
         </>
       ) : (
@@ -418,14 +574,11 @@ function CheckoutPage() {
       return {};
     }
   });
-  const [slug] = useState(() => {
-    try {
-      const savedCart = JSON.parse(localStorage.getItem('freshcart-cart') || '{}');
-      return Object.values(savedCart)[0]?.shopSlug || '';
-    } catch {
-      return '';
-    }
-  });
+  const cartGroups = groupCartItemsByShop(cart);
+  const shopSlugs = Object.keys(cartGroups);
+  const items = Object.values(cart);
+  const slug = shopSlugs[0] || '';
+  const hasMixedShops = shopSlugs.length > 1;
   const [account, setAccount] = useState(null);
   const [accountLoading, setAccountLoading] = useState(true);
   const [shop, setShop] = useState(null);
@@ -449,12 +602,25 @@ function CheckoutPage() {
   }, []);
 
   useEffect(() => {
+    if (items.length) {
+      localStorage.setItem('freshcart-cart', JSON.stringify(cart));
+    } else {
+      localStorage.removeItem('freshcart-cart');
+    }
+  }, [cart, items.length]);
+
+  useEffect(() => {
     if (!slug) {
+      setShop(null);
       setShopLoading(false);
+      setShopLoadError('');
       return undefined;
     }
 
     let cancelled = false;
+    setShop(null);
+    setShopLoading(true);
+    setShopLoadError('');
     request(`/public/shops/${encodeURIComponent(slug)}`)
       .then(({ shop: currentShop }) => {
         if (!cancelled) setShop(currentShop);
@@ -469,7 +635,6 @@ function CheckoutPage() {
     return () => { cancelled = true; };
   }, [slug]);
 
-  const items = Object.values(cart);
   const subtotal = items.reduce((sum, item) => (
     sum + (item.product.discount_price || item.product.price) * Number(item.quantity || 0)
   ), 0);
@@ -491,9 +656,27 @@ function CheckoutPage() {
     });
   };
 
+  const removeShopItems = (shopSlug) => {
+    setCart((current) => Object.fromEntries(
+      Object.entries(current).filter(([, item]) => item.shopSlug !== shopSlug)
+    ));
+    setStatus('');
+  };
+
+  const keepOnlyShopItems = (shopSlug) => {
+    setCart((current) => Object.fromEntries(
+      Object.entries(current).filter(([, item]) => item.shopSlug === shopSlug)
+    ));
+    setStatus('');
+  };
+
   const submitOrder = async (event) => {
     event.preventDefault();
     if (!items.length || submitting || shopLoading || !shop || shopLoadError) return;
+    if (hasMixedShops) {
+      setStatus('Choose one shop before placing the order.');
+      return;
+    }
     setStatus('');
 
     const invalidQuantity = items.some((item) => {
@@ -502,7 +685,9 @@ function CheckoutPage() {
       return !Number.isFinite(quantity)
         || quantity <= 0
         || quantity > Number(item.product.stock)
-        || (unit === 'piece' ? !Number.isInteger(quantity) : Math.abs(quantity * 100 - Math.round(quantity * 100)) >= 1e-8);
+        || (isFractionalProductUnit(unit)
+          ? Math.abs(quantity * 100 - Math.round(quantity * 100)) >= 1e-8
+          : !Number.isInteger(quantity));
     });
     if (invalidQuantity) {
       setStatus('Check each quantity against the available stock and unit.');
@@ -615,48 +800,79 @@ function CheckoutPage() {
           </select>
         </label>
         <div className="summary-box">
-          {items.length ? (
-            items.map((item) => (
-              <div key={item.product.id} className="summary-row">
-                <div>
-                  <span>{item.product.name}</span>
-                  <label>
-                    Quantity ({getProductUnit(item.product)})
-                    <input
-                      type="number"
-                      min={getProductUnit(item.product) === 'piece' ? '1' : '0.01'}
-                      max={item.product.stock}
-                      step={getProductUnit(item.product) === 'piece' ? '1' : '0.01'}
-                      value={item.quantity}
-                      onChange={(event) => updateCartQuantity(item.product.id, event.target.value)}
-                    />
-                  </label>
-                  <button type="button" className="btn btn-secondary" onClick={() => removeCartItem(item.product.id)}>
-                    Remove
+          {shopSlugs.length ? Object.entries(cartGroups).map(([shopSlug, shopItems]) => {
+            const shopName = shopItems[0]?.item.shopName || formatShopName(shopSlug);
+            const shopSubtotal = shopItems.reduce((sum, { item }) => (
+              sum + (item.product.discount_price || item.product.price) * Number(item.quantity || 0)
+            ), 0);
+
+            return (
+              <section className="cart-shop-group" key={shopSlug}>
+                <div className="cart-shop-header">
+                  <h3>{shopName}</h3>
+                  <button type="button" className="btn btn-secondary" onClick={() => removeShopItems(shopSlug)}>
+                    Remove shop items
                   </button>
                 </div>
-                <strong>{formatCurrency((item.product.discount_price || item.product.price) * Number(item.quantity || 0))}</strong>
+                {shopItems.map(({ productId, item }) => (
+                  <div key={productId} className="summary-row">
+                    <div className="cart-product-row">
+                      <div>
+                        <span>{item.product.name}</span>
+                        <label>
+                          Quantity ({getProductUnitLabel(getProductUnit(item.product))})
+                          <input
+                            type="number"
+                            min={isFractionalProductUnit(getProductUnit(item.product)) ? '0.01' : '1'}
+                            max={item.product.stock}
+                            step={isFractionalProductUnit(getProductUnit(item.product)) ? '0.01' : '1'}
+                            value={item.quantity}
+                            onChange={(event) => updateCartQuantity(productId, event.target.value)}
+                          />
+                        </label>
+                      </div>
+                      <div className="cart-item-actions">
+                        <strong>{formatCurrency((item.product.discount_price || item.product.price) * Number(item.quantity || 0))}</strong>
+                        <button type="button" className="btn btn-secondary" onClick={() => removeCartItem(productId)}>
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                <div className="summary-row">
+                  <span>{shopName} items subtotal</span>
+                  <strong>{formatCurrency(shopSubtotal)}</strong>
+                </div>
+                {hasMixedShops ? (
+                  <button type="button" className="btn btn-primary" onClick={() => keepOnlyShopItems(shopSlug)}>
+                    Keep only {shopName} items
+                  </button>
+                ) : null}
+              </section>
+            );
+          }) : <p>Your cart is empty.</p>}
+          {!hasMixedShops && items.length ? (
+            <>
+              <div className="summary-row">
+                <span>Delivery charge{shop && deliveryCharge === 0 ? ' (Free)' : ''}</span>
+                <strong>
+                  {shopLoading ? 'Loading…' : shopLoadError ? 'Unavailable' : formatCurrency(deliveryCharge)}
+                </strong>
               </div>
-            ))
-          ) : (
-            <p>Your cart is empty.</p>
-          )}
-          <div className="summary-row">
-            <span>Items subtotal</span>
-            <strong>{formatCurrency(subtotal)}</strong>
-          </div>
-          <div className="summary-row">
-            <span>Delivery charge{shop && deliveryCharge === 0 ? ' (Free)' : ''}</span>
-            <strong>
-              {shopLoading ? 'Loading…' : shopLoadError ? 'Unavailable' : formatCurrency(deliveryCharge)}
-            </strong>
-          </div>
-          <div className="summary-row total-row">
-            <span>Total</span>
-            <strong>{formatCurrency(total)}</strong>
-          </div>
+              <div className="summary-row total-row">
+                <span>Total</span>
+                <strong>{formatCurrency(total)}</strong>
+              </div>
+            </>
+          ) : null}
         </div>
-        <button className="btn btn-primary" type="submit" disabled={!items.length || submitting || shopLoading || !shop || Boolean(shopLoadError)}>
+        {hasMixedShops ? (
+          <div className="status-banner" role="status">
+            Cart products are grouped by shop above. Keep one shop’s items for checkout; other shop items will be removed.
+          </div>
+        ) : null}
+        <button className="btn btn-primary" type="submit" disabled={!items.length || hasMixedShops || submitting || shopLoading || !shop || Boolean(shopLoadError)}>
           {submitting ? 'Placing order…' : shopLoading ? 'Loading delivery charge…' : 'Place order'}
         </button>
         {status ? (
@@ -853,7 +1069,7 @@ function CustomerOrdersPage() {
               <ul className="customer-order-items">
                 {order.items.map((item) => (
                   <li key={`${order.id}-${item.product_id}`}>
-                    <span>{item.product_name} × {formatQuantity(item.quantity)} {item.unit}</span>
+                    <span>{item.product_name} × {formatQuantity(item.quantity)} {getProductUnitLabel(item.unit || 'piece')}</span>
                     <strong>{formatCurrency(item.subtotal)}</strong>
                   </li>
                 ))}
@@ -931,6 +1147,7 @@ function LoginPage() {
 }
 
 function DashboardPage() {
+  const location = useLocation();
   const [user, setUser] = useState(null);
   const [summary, setSummary] = useState(null);
   const [orders, setOrders] = useState([]);
@@ -962,6 +1179,8 @@ function DashboardPage() {
     name: '',
     imageUrl: '',
   });
+  const [categoryImage, setCategoryImage] = useState(null);
+  const [categoryImagePreview, setCategoryImagePreview] = useState('');
   const [shopFormOpen, setShopFormOpen] = useState(false);
   const [shopFormStatus, setShopFormStatus] = useState('');
   const [adminCredentials, setAdminCredentials] = useState({
@@ -984,6 +1203,11 @@ function DashboardPage() {
     try {
       const me = await request('/auth/me');
       setUser(me.user);
+      const isAuthorizedRoute = location.pathname === '/admin'
+        ? me.user.role === 'super_admin'
+        : me.user.role === 'shop_owner';
+      if (!isAuthorizedRoute) return;
+
       if (me.user.role === 'super_admin') {
         setAdminCredentials((current) => current.email ? current : { ...current, email: me.user.email });
       }
@@ -998,7 +1222,7 @@ function DashboardPage() {
       if (me.user.role === 'super_admin') {
         const shopData = await request('/admin/shops');
         setShops(shopData.shops || []);
-      } else {
+      } else if (me.user.role === 'shop_owner') {
         const productData = await request('/products');
         setProducts(productData.products || []);
         const categoryData = await request('/categories');
@@ -1019,7 +1243,7 @@ function DashboardPage() {
     });
 
     return () => socket.disconnect();
-  }, []);
+  }, [location.pathname]);
 
   const resetProductForm = () => {
     setProductForm({
@@ -1042,6 +1266,9 @@ function DashboardPage() {
   };
 
   const resetCategoryForm = () => {
+    if (categoryImagePreview.startsWith('blob:')) URL.revokeObjectURL(categoryImagePreview);
+    setCategoryImage(null);
+    setCategoryImagePreview('');
     setCategoryForm({ id: null, name: '', imageUrl: '' });
   };
 
@@ -1140,12 +1367,27 @@ function DashboardPage() {
   const handleCategorySubmit = async (event) => {
     event.preventDefault();
     try {
+      let imageUrl = categoryForm.imageUrl;
+      if (categoryImage) {
+        const formData = new FormData();
+        formData.append('image', categoryImage);
+        const uploadedImage = await request('/categories/upload-image', {
+          method: 'POST',
+          body: formData,
+        });
+        imageUrl = uploadedImage.imageUrl;
+        if (categoryImagePreview.startsWith('blob:')) URL.revokeObjectURL(categoryImagePreview);
+        setCategoryImage(null);
+        setCategoryImagePreview(imageUrl);
+        setCategoryForm((current) => ({ ...current, imageUrl }));
+      }
+
       if (categoryForm.id) {
         await request(`/categories/${categoryForm.id}`, {
           method: 'PATCH',
           body: JSON.stringify({
             name: categoryForm.name,
-            imageUrl: categoryForm.imageUrl,
+            imageUrl,
           }),
         });
       } else {
@@ -1153,7 +1395,7 @@ function DashboardPage() {
           method: 'POST',
           body: JSON.stringify({
             name: categoryForm.name,
-            imageUrl: categoryForm.imageUrl,
+            imageUrl,
           }),
         });
       }
@@ -1173,7 +1415,7 @@ function DashboardPage() {
       price: String(product.price),
       discountPrice: String(product.discount_price || 0),
       stock: String(product.stock || 0),
-      unit: ['kg', 'liter'].includes(product.unit) ? product.unit : 'piece',
+      unit: PRODUCT_UNIT_OPTIONS.some(({ value }) => value === product.unit) ? product.unit : 'piece',
       categoryId: product.category_id || '',
       sku: product.sku || '',
       imageUrl: product.image_url || '',
@@ -1196,6 +1438,9 @@ function DashboardPage() {
   };
 
   const loadCategoryForEdit = (category) => {
+    if (categoryImagePreview.startsWith('blob:')) URL.revokeObjectURL(categoryImagePreview);
+    setCategoryImage(null);
+    setCategoryImagePreview(category.image_url || '');
     setCategoryForm({ id: category.id, name: category.name, imageUrl: category.image_url || '' });
   };
 
@@ -1244,6 +1489,12 @@ function DashboardPage() {
     }
   };
 
+  if (user && location.pathname === '/admin' && user.role !== 'super_admin') {
+    return <Navigate to={user.role === 'shop_owner' ? '/shop-admin' : '/customer/orders'} replace />;
+  }
+  if (user && location.pathname === '/shop-admin' && user.role !== 'shop_owner') {
+    return <Navigate to={user.role === 'super_admin' ? '/admin' : '/customer/orders'} replace />;
+  }
   if (!summary || !user) {
     return <div className="page-shell"><div className="empty-state">Loading dashboard…</div></div>;
   }
@@ -1556,13 +1807,13 @@ function DashboardPage() {
                 <label>
                   Selling unit
                   <select value={productForm.unit} onChange={(e) => setProductForm({ ...productForm, unit: e.target.value })}>
-                    <option value="piece">Piece</option>
-                    <option value="kg">Kilogram (kg)</option>
-                    <option value="liter">Liter (L)</option>
+                    {PRODUCT_UNIT_OPTIONS.map((unit) => (
+                      <option key={unit.value} value={unit.value}>{unit.label}</option>
+                    ))}
                   </select>
                 </label>
                 <label>
-                  Price per {productForm.unit === 'piece' ? 'piece' : productForm.unit}
+                  Price per {getProductUnitLabel(productForm.unit)}
                   <input
                     type="number"
                     min="0.01"
@@ -1577,11 +1828,11 @@ function DashboardPage() {
                   <input type="number" min="0" step="0.01" value={productForm.discountPrice} onChange={(e) => setProductForm({ ...productForm, discountPrice: e.target.value })} />
                 </label>
                 <label>
-                  Stock ({productForm.unit === 'piece' ? 'pieces' : productForm.unit})
+                  Stock ({getProductUnitLabel(productForm.unit)})
                   <input
                     type="number"
                     min="0"
-                    step={productForm.unit === 'piece' ? '1' : '0.01'}
+                    step={isFractionalProductUnit(productForm.unit) ? '0.01' : '1'}
                     value={productForm.stock}
                     onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })}
                   />
@@ -1653,9 +1904,36 @@ function DashboardPage() {
                   <input value={categoryForm.name} onChange={(e) => setCategoryForm({ ...categoryForm, name: e.target.value })} />
                 </label>
                 <label>
-                  Category image URL
-                  <input value={categoryForm.imageUrl} onChange={(e) => setCategoryForm({ ...categoryForm, imageUrl: e.target.value })} />
+                  Category image
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] || null;
+                      if (categoryImagePreview.startsWith('blob:')) URL.revokeObjectURL(categoryImagePreview);
+                      setCategoryImage(file);
+                      setCategoryImagePreview(file ? URL.createObjectURL(file) : categoryForm.imageUrl);
+                    }}
+                  />
+                  <small>JPG, PNG or WebP; maximum 5 MB.</small>
                 </label>
+                {categoryImagePreview ? (
+                  <div className="image-upload-preview">
+                    <img className="image-preview" src={categoryImagePreview} alt="Category preview" />
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        if (categoryImagePreview.startsWith('blob:')) URL.revokeObjectURL(categoryImagePreview);
+                        setCategoryImage(null);
+                        setCategoryImagePreview('');
+                        setCategoryForm((current) => ({ ...current, imageUrl: '' }));
+                      }}
+                    >
+                      Remove image
+                    </button>
+                  </div>
+                ) : null}
                 <div className="button-row">
                   <button className="btn btn-primary" type="submit">{categoryForm.id ? 'Update category' : 'Save category'}</button>
                   {categoryForm.id ? <button type="button" className="btn btn-secondary" onClick={resetCategoryForm}>Cancel</button> : null}
@@ -1671,7 +1949,7 @@ function DashboardPage() {
                 <div key={product.id} className="manager-item">
                   <div>
                     <strong>{product.name}</strong>
-                    <p>{formatQuantity(product.stock)} {getProductUnit(product)} in stock · {formatCurrency(product.discount_price || product.price)} / {getProductUnit(product)} · {product.category_name || 'General'}</p>
+                    <p>{formatQuantity(product.stock)} {getProductUnitLabel(getProductUnit(product))} in stock · {formatCurrency(product.discount_price || product.price)} / {getProductUnitLabel(getProductUnit(product))} · {product.category_name || 'General'}</p>
                   </div>
                   <div className="row-actions">
                     <span className={`status-badge ${product.is_active ? 'live' : 'inactive'}`}>
@@ -1688,6 +1966,9 @@ function DashboardPage() {
               {categories.map((category) => (
                 <div key={category.id} className="manager-item">
                   <div>
+                    {category.image_url ? (
+                      <img className="category-manager-image" src={category.image_url} alt="" />
+                    ) : null}
                     <strong>{category.name}</strong>
                     <p>{category.slug}</p>
                   </div>
@@ -1763,7 +2044,7 @@ function DashboardPage() {
               <p><strong>Total:</strong> {formatCurrency(selectedOrder.total_amount)}</p>
               <ul>
                 {(selectedOrder.items || []).map((item) => (
-                  <li key={item.id}>{item.product_name} × {formatQuantity(item.quantity)} {item.unit || 'piece'} = {formatCurrency(item.subtotal)}</li>
+                  <li key={item.id}>{item.product_name} × {formatQuantity(item.quantity)} {getProductUnitLabel(item.unit || 'piece')} = {formatCurrency(item.subtotal)}</li>
                 ))}
               </ul>
             </div>

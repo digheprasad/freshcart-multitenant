@@ -13,9 +13,10 @@ FreshCart is a multi-tenant grocery e-commerce platform for multiple shop owners
 - Checkout requires a customer account, phone number and delivery address with a landmark
 - Shop owners can view and call the customer using the phone number on an order
 - Checkout shows the shop's delivery charge separately and includes it in the final total
-- Products can be priced and stocked by piece, kilogram, or liter; customers can choose fractional kg/liter quantities
+- Products support g, mg, kg, L, ml, piece, dozen, packet, box, bottle, pouch, bundle, pair, set, pack, carton, tray, roll, and meter units; measured units allow fractional quantities up to two decimal places while counted units must be whole numbers
 - Customer storefront for browsing and placing orders
 - Shop owners can upload JPG, PNG, or WebP product images (up to 5 MB)
+- Shop owners can upload category images, and customers can browse products by category
 - SEO metadata, social sharing tags, structured store/product data, and an active-shop sitemap
 - Secure authentication and JWT-based session handling
 - SQLite-backed tenant-aware data layer

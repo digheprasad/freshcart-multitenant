@@ -47,6 +47,18 @@ async function apiRequest(baseUrl, route, { method = 'GET', body, cookie } = {})
   return { response, data, cookie: token ? `token=${token}` : cookie };
 }
 
+async function apiUpload(baseUrl, route, { cookie, bytes, fileName = 'category.png' }) {
+  const formData = new FormData();
+  formData.append('image', new Blob([bytes], { type: 'image/png' }), fileName);
+  const response = await fetch(`${baseUrl}/api${route}`, {
+    method: 'POST',
+    headers: cookie ? { Cookie: cookie } : {},
+    body: formData,
+  });
+  const data = await response.json();
+  return { response, data };
+}
+
 test('customers can view and cancel their pending orders, but not other customers’ orders', async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'freshcart-customer-orders-'));
   const port = await getAvailablePort();
@@ -114,12 +126,59 @@ test('customers can view and cancel their pending orders, but not other customer
   });
   assert.equal(ownerLogin.response.status, 200);
 
+  const categoryImageUpload = await apiUpload(baseUrl, '/categories/upload-image', {
+    cookie: ownerLogin.cookie,
+    bytes: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+  });
+  assert.equal(categoryImageUpload.response.status, 201);
+  assert.match(categoryImageUpload.data.imageUrl, /^\/uploads\/categories\/\d+\/.+\.png$/);
+
+  const categoryResponse = await apiRequest(baseUrl, '/categories', {
+    method: 'POST',
+    cookie: ownerLogin.cookie,
+    body: { name: 'Fresh Produce', imageUrl: categoryImageUpload.data.imageUrl },
+  });
+  assert.equal(categoryResponse.response.status, 201);
+
   const productResponse = await apiRequest(baseUrl, '/products', {
     method: 'POST',
     cookie: ownerLogin.cookie,
-    body: { name: 'Test Apples', price: 10, stock: 5, unit: 'piece' },
+    body: { name: 'Test Apples', price: 10, stock: 5, unit: 'piece', categoryId: categoryResponse.data.categoryId },
   });
   assert.equal(productResponse.response.status, 201);
+
+  const publicCatalog = await apiRequest(baseUrl, '/public/shops/test-grocery/products');
+  assert.equal(publicCatalog.response.status, 200);
+  assert.equal(publicCatalog.data.categories[0].image_url, categoryImageUpload.data.imageUrl);
+  assert.equal(publicCatalog.data.products[0].category_name, 'Fresh Produce');
+  assert.equal(publicCatalog.data.products[0].category_image_url, categoryImageUpload.data.imageUrl);
+
+  const fractionalUnits = new Set(['g', 'mg', 'kg', 'liter', 'ml', 'meter']);
+  const supportedUnits = [
+    'g', 'mg', 'kg', 'liter', 'ml', 'piece', 'dozen', 'packet',
+    'box', 'bottle', 'pouch', 'bundle', 'pair', 'set', 'pack',
+    'carton', 'tray', 'roll', 'meter',
+  ];
+  for (const unit of supportedUnits) {
+    const unitProduct = await apiRequest(baseUrl, '/products', {
+      method: 'POST',
+      cookie: ownerLogin.cookie,
+      body: {
+        name: `Test ${unit} product`,
+        price: 2,
+        stock: fractionalUnits.has(unit) ? 250.5 : 2,
+        unit,
+      },
+    });
+    assert.equal(unitProduct.response.status, 201, `${unit} should be a supported selling unit`);
+  }
+
+  const fractionalPacketStock = await apiRequest(baseUrl, '/products', {
+    method: 'POST',
+    cookie: ownerLogin.cookie,
+    body: { name: 'Test Packets', price: 5, stock: 1.5, unit: 'packet' },
+  });
+  assert.equal(fractionalPacketStock.response.status, 400);
 
   const customerLogin = await apiRequest(baseUrl, '/auth/register', {
     method: 'POST',
@@ -182,7 +241,10 @@ test('customers can view and cancel their pending orders, but not other customer
   assert.equal(cancel.response.status, 200);
 
   const stockAfterCancel = await apiRequest(baseUrl, '/products', { cookie: ownerLogin.cookie });
-  assert.equal(stockAfterCancel.data.products[0].stock, 5);
+  assert.equal(
+    stockAfterCancel.data.products.find((product) => product.id === productResponse.data.productId).stock,
+    5
+  );
 
   const secondOrder = await apiRequest(baseUrl, '/orders', {
     method: 'POST',
@@ -213,5 +275,8 @@ test('customers can view and cancel their pending orders, but not other customer
   const finalHistory = await apiRequest(baseUrl, '/customer/orders', { cookie: customerLogin.cookie });
   assert.deepEqual(finalHistory.data.orders.map((order) => order.status), ['processing', 'cancelled']);
   const finalStock = await apiRequest(baseUrl, '/products', { cookie: ownerLogin.cookie });
-  assert.equal(finalStock.data.products[0].stock, 4);
+  assert.equal(
+    finalStock.data.products.find((product) => product.id === productResponse.data.productId).stock,
+    4
+  );
 });

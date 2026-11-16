@@ -209,6 +209,58 @@ textarea {
   margin-top: 2rem;
 }
 
+.shop-categories {
+  margin-top: 2rem;
+}
+
+.category-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 1rem;
+}
+
+.category-card {
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: white;
+  text-align: left;
+  cursor: pointer;
+}
+
+.category-card img {
+  width: 100%;
+  height: 110px;
+  object-fit: cover;
+}
+
+.category-card span,
+.category-card small {
+  display: block;
+  padding: 0 0.75rem;
+}
+
+.category-card span {
+  padding-top: 0.65rem;
+  font-weight: 700;
+}
+
+.category-card small {
+  padding-top: 0.25rem;
+  padding-bottom: 0.75rem;
+  color: var(--muted);
+}
+
+.category-card.active {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-soft);
+}
+
+.product-section h2 {
+  margin-bottom: 0.5rem;
+}
+
 .shop-card, .product-card {
   overflow: hidden;
 }
@@ -438,6 +490,52 @@ textarea {
   border-bottom: 0;
 }
 
+.cart-panel {
+  margin-bottom: 1.5rem;
+}
+
+.cart-shop-group + .cart-shop-group {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.cart-shop-header,
+.cart-product-row,
+.cart-item-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.cart-shop-header h3 {
+  margin: 0;
+}
+
+.cart-item-name {
+  display: grid;
+}
+
+.cart-item-name small {
+  color: var(--muted);
+}
+
+.cart-product-row > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.cart-product-row label {
+  max-width: 180px;
+  margin: 0.5rem 0 0;
+}
+
+.cart-item-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .status-banner {
   margin-top: 1rem;
   color: var(--primary);
@@ -512,6 +610,15 @@ textarea {
   object-fit: cover;
   border-radius: 12px;
   border: 1px solid var(--border);
+}
+
+.category-manager-image {
+  width: 56px;
+  height: 56px;
+  margin-right: 0.75rem;
+  border-radius: 10px;
+  object-fit: cover;
+  vertical-align: middle;
 }
 
 .toolbar {

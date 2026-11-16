@@ -37,7 +37,12 @@ const PORT = Number(process.env.PORT) || 4000;
 const HOST = process.env.HOST || '0.0.0.0';
 const SITE_URL = (process.env.SITE_URL || 'http://localhost:4000').replace(/\/+$/, '');
 const JWT_SECRET = process.env.JWT_SECRET || 'freshcart-dev-secret-change-me';
-const PRODUCT_UNITS = ['piece', 'kg', 'liter'];
+const PRODUCT_UNITS = [
+  'g', 'mg', 'kg', 'liter', 'ml', 'piece', 'dozen', 'packet',
+  'box', 'bottle', 'pouch', 'bundle', 'pair', 'set', 'pack',
+  'carton', 'tray', 'roll', 'meter',
+];
+const FRACTIONAL_PRODUCT_UNITS = new Set(['g', 'mg', 'kg', 'liter', 'ml', 'meter']);
 const DEFAULT_PAGE_TITLE = 'FreshCart | Buy Fresh Groceries Online';
 const DEFAULT_PAGE_DESCRIPTION = 'Shop fresh groceries from neighborhood stores with FreshCart. Browse local shops, compare products, and order for delivery.';
 const DEFAULT_SOCIAL_IMAGE = 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=1200&q=80';
@@ -54,16 +59,16 @@ const productImageUpload = multer({
 
 function isValidStock(stock, unit) {
   if (!Number.isFinite(stock) || stock < 0) return false;
-  return unit === 'piece'
-    ? Number.isInteger(stock)
-    : Math.abs(stock * 100 - Math.round(stock * 100)) < 1e-8;
+  return FRACTIONAL_PRODUCT_UNITS.has(unit)
+    ? Math.abs(stock * 100 - Math.round(stock * 100)) < 1e-8
+    : Number.isInteger(stock);
 }
 
 function isValidOrderQuantity(quantity, unit) {
   if (!Number.isFinite(quantity) || quantity <= 0) return false;
-  return unit === 'piece'
-    ? Number.isInteger(quantity)
-    : Math.abs(quantity * 100 - Math.round(quantity * 100)) < 1e-8;
+  return FRACTIONAL_PRODUCT_UNITS.has(unit)
+    ? Math.abs(quantity * 100 - Math.round(quantity * 100)) < 1e-8
+    : Number.isInteger(quantity);
 }
 
 function getImageFileType(buffer) {
@@ -737,9 +742,12 @@ app.get('/api/public/shops/:slug/products', (req, res) => {
     return res.status(404).json({ success: false, error: 'Shop not found.' });
   }
 
+  const categories = db
+    .prepare('SELECT id, name, slug, image_url FROM categories WHERE shop_id = ? AND is_active = 1 ORDER BY name')
+    .all(shop.id);
   const products = db
     .prepare(
-      `SELECT p.*, c.name AS category_name
+      `SELECT p.*, c.name AS category_name, c.image_url AS category_image_url
        FROM products p
        LEFT JOIN categories c ON c.id = p.category_id
        WHERE p.shop_id = ? AND p.is_active = 1
@@ -747,7 +755,7 @@ app.get('/api/public/shops/:slug/products', (req, res) => {
     )
     .all(shop.id);
 
-  return res.json({ success: true, shop, products });
+  return res.json({ success: true, shop, categories, products });
 });
 
 app.get('/api/dashboard/summary', authUser, (req, res) => {
@@ -958,6 +966,45 @@ app.get('/api/categories', authUser, (req, res) => {
     .all(shopId);
   return res.json({ success: true, categories });
 });
+
+app.post(
+  '/api/categories/upload-image',
+  authUser,
+  requireRoles('super_admin', 'shop_owner'),
+  (req, res, next) => {
+    productImageUpload.single('image')(req, res, (error) => {
+      if (!error) return next();
+      if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ success: false, error: 'Image must be 5 MB or smaller.' });
+      }
+      return res.status(400).json({ success: false, error: error.message || 'Image upload failed.' });
+    });
+  },
+  async (req, res) => {
+    const shopId = getCurrentShopId(req);
+    if (!shopId) {
+      return res.status(403).json({ success: false, error: 'Shop scope missing.' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: 'Choose an image to upload.' });
+    }
+
+    const imageType = getImageFileType(req.file.buffer);
+    if (!imageType || imageType.mimeType !== req.file.mimetype) {
+      return res.status(400).json({ success: false, error: 'The selected file is not a valid JPG, PNG, or WebP image.' });
+    }
+
+    const imageDirectory = path.join(__dirname, 'uploads', 'categories', String(shopId));
+    const filename = `${randomUUID()}.${imageType.extension}`;
+    await fs.promises.mkdir(imageDirectory, { recursive: true });
+    await fs.promises.writeFile(path.join(imageDirectory, filename), req.file.buffer, { flag: 'wx' });
+
+    return res.status(201).json({
+      success: true,
+      imageUrl: `/uploads/categories/${shopId}/${filename}`,
+    });
+  }
+);
 
 app.post('/api/categories', authUser, requireRoles('super_admin', 'shop_owner'), (req, res) => {
   const shopId = getCurrentShopId(req);
